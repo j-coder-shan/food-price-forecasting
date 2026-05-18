@@ -188,7 +188,7 @@ class ModelEvaluator:
         df_metrics = pd.DataFrame(rows).sort_values("RMSE")
         safe = sanitize_filename(self.target)
         path = METRICS_DIR / f"{safe}_metrics.csv"
-        df_metrics.to_csv(path, index=False)
+        df_metrics.to_csv(path, index=False, encoding="utf-8")
         logger.info(f"  Metrics saved: {path}")
         return path
 

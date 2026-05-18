@@ -225,7 +225,7 @@ class Forecaster:
         safe_target = sanitize_filename(self.target)
         safe_model = sanitize_filename(model_name)
         path = FORECASTS_DIR / f"{safe_target}_{safe_model}_{horizon}m_forecast.csv"
-        df_forecast.to_csv(path, index=False)
+        df_forecast.to_csv(path, index=False, encoding="utf-8")
         logger.info(f"  Saved forecast: {path.name}")
         return path
 

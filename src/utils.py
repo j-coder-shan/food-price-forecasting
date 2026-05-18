@@ -129,10 +129,10 @@ def get_food_columns(df) -> list[str]:
 def sanitize_filename(name: str) -> str:
     """
     Converts a column name (which may contain special characters) into a
-    safe filesystem name.
+    safe ASCII filesystem name.
     """
     import re
-    return re.sub(r"[^\w\-]", "_", name).strip("_")
+    return re.sub(r"[^A-Za-z0-9_\-]", "_", name).strip("_")
 
 
 # ─────────────────────────────────────────────
