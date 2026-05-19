@@ -16,7 +16,7 @@ def _inflation_gauge(value: float, label: str) -> go.Figure:
     fig = go.Figure(go.Indicator(
         mode="gauge+number+delta",
         value=value,
-        number=dict(suffix="%", font=dict(size=36, color=TEXT_PRIMARY, family="Poppins")),
+        number=dict(suffix="%", font=dict(size=26, color=TEXT_PRIMARY, family="Poppins")),
         title=dict(text=label, font=dict(size=13, color=TEXT_SECONDARY)),
         gauge=dict(
             axis=dict(range=[-5, 30], tickcolor=TEXT_SECONDARY,
@@ -34,7 +34,7 @@ def _inflation_gauge(value: float, label: str) -> go.Figure:
     ))
     fig.update_layout(
         paper_bgcolor=BG_CARD, font=dict(color=TEXT_PRIMARY),
-        margin=dict(l=30, r=30, t=50, b=20), height=220,
+        margin=dict(l=20, r=20, t=40, b=10), height=240,
     )
     return fig
 

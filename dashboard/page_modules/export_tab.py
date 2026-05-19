@@ -2,6 +2,9 @@
 from datetime import datetime
 import pandas as pd
 import streamlit as st
+import importlib
+import src.export
+importlib.reload(src.export)
 from src.export import get_csv_bytes, get_excel_bytes, get_pdf_bytes, build_full_report
 from src.inflation import InflationCalculator
 
@@ -109,6 +112,7 @@ def render(df: pd.DataFrame, cfg: dict, results: dict) -> None:
         summary_df=report_sheets.get("Summary"),
         inflation_summary=inf_summary,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        forecast_df=report_sheets.get(f"Forecasts_{horizon}m"),
     )
     if pdf_bytes:
         col_pdf.download_button(
@@ -118,7 +122,7 @@ def render(df: pd.DataFrame, cfg: dict, results: dict) -> None:
             mime="application/pdf",
             use_container_width=True,
         )
-        col_info.info(f"PDF includes: summary metrics table, inflation statistics, and generation timestamp.")
+        col_info.info(f"PDF includes: summary metrics table, inflation statistics, forecast predictions, and generation timestamp.")
     else:
         col_pdf.warning("Install `fpdf2` to enable PDF export: `pip install fpdf2`")
 

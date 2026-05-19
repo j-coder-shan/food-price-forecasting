@@ -53,6 +53,9 @@ AVAILABLE_MODELS = {
         "LightGBM",
         "CatBoost",
     ],
+    "DeepLearning": [
+        "STGNN",
+    ],
     "Statistical": [
         "ARIMA",
         "SARIMA",
@@ -60,7 +63,7 @@ AVAILABLE_MODELS = {
     ],
 }
 
-DEFAULT_MODELS = ["LinearRegression", "RandomForest", "XGBoost", "LightGBM", "CatBoost"]
+DEFAULT_MODELS = ["LinearRegression", "RandomForest", "XGBoost", "LightGBM", "CatBoost", "STGNN"]
 
 
 # ─────────────────────────────────────────────

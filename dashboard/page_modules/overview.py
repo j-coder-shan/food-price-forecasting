@@ -63,8 +63,8 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
             # Mini stats
             b = df["Brent_USD"]
             col_l.markdown(
-                f"<small style='color:#94A3B8'>Latest: **${b.iloc[-1]:.1f}** &nbsp;|&nbsp; "
-                f"Min: **${b.min():.1f}** &nbsp;|&nbsp; Max: **${b.max():.1f}**</small>",
+                f"<small style='color:#94A3B8'>Latest: <b>${b.iloc[-1]:.1f}</b> &nbsp;|&nbsp; "
+                f"Min: <b>${b.min():.1f}</b> &nbsp;|&nbsp; Max: <b>${b.max():.1f}</b></small>",
                 unsafe_allow_html=True,
             )
 
@@ -77,8 +77,8 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
             )
             fx = df["USD_LKR"]
             col_r.markdown(
-                f"<small style='color:#94A3B8'>Latest: **LKR {fx.iloc[-1]:.1f}** &nbsp;|&nbsp; "
-                f"Min: **{fx.min():.1f}** &nbsp;|&nbsp; Max: **{fx.max():.1f}**</small>",
+                f"<small style='color:#94A3B8'>Latest: <b>LKR {fx.iloc[-1]:.1f}</b> &nbsp;|&nbsp; "
+                f"Min: <b>{fx.min():.1f}</b> &nbsp;|&nbsp; Max: <b>{fx.max():.1f}</b></small>",
                 unsafe_allow_html=True,
             )
 

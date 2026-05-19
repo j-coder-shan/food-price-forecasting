@@ -1,8 +1,14 @@
 """dashboard/components/sidebar.py — Redesigned sidebar with validation, status badges, and model selection."""
 import io
+import importlib
 import streamlit as st
 from pathlib import Path
+
+# Force reload utils to bypass Streamlit module caching
+import src.utils
+importlib.reload(src.utils)
 from src.utils import AVAILABLE_MODELS, DEFAULT_MODELS, DATA_DIR
+
 from src.validation import DatasetValidator, show_validation
 from dashboard.styles.theme import (
     ACCENT_BLUE, ACCENT_GREEN, ACCENT_AMBER, TEXT_SECONDARY, BG_CARD
@@ -130,21 +136,27 @@ def render_sidebar(food_cols: list[str]) -> dict:
                 "<div class='section-title' style='font-size:0.8rem;margin-top:0.8rem;'>Models</div>",
                 unsafe_allow_html=True,
             )
-            ml_sel, stat_sel = [], []
+            ml_sel, stat_sel, dl_sel = [], [], []
             ml_cols = st.columns(2)
-            for i, m in enumerate(AVAILABLE_MODELS["ML"]):
+            for i, m in enumerate(AVAILABLE_MODELS.get("ML", [])):
                 checked = ml_cols[i % 2].checkbox(m, value=(m in DEFAULT_MODELS),
                                                    key=f"m_{m}")
                 if checked:
                     ml_sel.append(m)
 
+            st.caption("Deep Learning (PyTorch)")
+            dl_cols = st.columns(2)
+            for i, m in enumerate(AVAILABLE_MODELS.get("DeepLearning", [])):
+                if dl_cols[i % 2].checkbox(m, value=(m in DEFAULT_MODELS), key=f"m_{m}"):
+                    dl_sel.append(m)
+
             st.caption("Statistical (slower, ~2 min/item)")
             stat_cols = st.columns(2)
-            for i, m in enumerate(AVAILABLE_MODELS["Statistical"]):
+            for i, m in enumerate(AVAILABLE_MODELS.get("Statistical", [])):
                 if stat_cols[i % 2].checkbox(m, value=False, key=f"m_{m}"):
                     stat_sel.append(m)
 
-            cfg["selected_models"]  = ml_sel + stat_sel
+            cfg["selected_models"]  = ml_sel + stat_sel + dl_sel
             cfg["skip_statistical"] = len(stat_sel) == 0
 
             if not cfg["selected_models"]:

@@ -58,6 +58,13 @@ except ImportError:
     HAS_PROPHET = False
     logger.warning("Prophet not available — skipping Prophet model.")
 
+try:
+    from src.models.gnn import STGNNRegressor
+    HAS_STGNN = True
+except ImportError:
+    HAS_STGNN = False
+    logger.warning("PyTorch not available — skipping STGNN model.")
+
 
 # ─────────────────────────────────────────────
 # ModelTrainer
@@ -146,6 +153,12 @@ class ModelTrainer:
             random_seed=42,
             silent=True,
         )
+        model.fit(self.split.X_train, self.split.y_train)
+        return model
+
+    def _train_stgnn(self):
+        logger.info("  → Training ST-GNN...")
+        model = STGNNRegressor(epochs=200, batch_size=16)
         model.fit(self.split.X_train, self.split.y_train)
         return model
 
@@ -278,6 +291,14 @@ class ModelTrainer:
                 self._save_model(m, "CatBoost")
             except Exception as e:
                 logger.error(f"CatBoost failed: {e}")
+
+        if HAS_STGNN and _should_train("STGNN"):
+            try:
+                m = self._train_stgnn()
+                models["STGNN"] = m
+                self._save_model(m, "STGNN")
+            except Exception as e:
+                logger.error(f"STGNN failed: {e}")
 
         # ── Statistical Models ──────────────────
         if not skip_statistical and HAS_STATSMODELS:

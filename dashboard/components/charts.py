@@ -88,6 +88,9 @@ def forecast_chart(hist: pd.Series, fc_df: pd.DataFrame, fc_col: str,
     # Vertical separator
     if len(hist) > 0:
         split_x = hist.index[-1]
+        if isinstance(split_x, pd.Timestamp):
+            split_x = split_x.timestamp() * 1000
+            
         fig.add_vline(x=split_x, line_dash="dot", line_color=TEXT_SECONDARY,
                       line_width=1, opacity=0.6,
                       annotation_text="Forecast start",

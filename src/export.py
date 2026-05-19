@@ -10,6 +10,7 @@ Supports:
 
 import io
 import warnings
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -54,7 +55,7 @@ def get_excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         for sheet_name, df in sheets.items():
-            safe_name = str(sheet_name)[:31]
+            safe_name = re.sub(r'[\\/?*\[\]:]', '_', str(sheet_name))[:31]
             df.to_excel(writer, sheet_name=safe_name, index=False)
     return buf.getvalue()
 
@@ -63,7 +64,7 @@ def save_excel(sheets: dict[str, pd.DataFrame], path: Path) -> Path:
     """Saves multiple DataFrames as sheets in a single .xlsx file."""
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         for sheet_name, df in sheets.items():
-            safe_name = str(sheet_name)[:31]
+            safe_name = re.sub(r'[\\/?*\[\]:]', '_', str(sheet_name))[:31]
             df.to_excel(writer, sheet_name=safe_name, index=False)
     logger.info(f"Saved Excel: {path} ({len(sheets)} sheets)")
     return path
@@ -170,6 +171,7 @@ def get_pdf_bytes(
     summary_df: pd.DataFrame | None,
     inflation_summary: dict | None,
     generated_at: str | None = None,
+    forecast_df: pd.DataFrame | None = None,
 ) -> bytes | None:
     """
     Generates a simple PDF summary report.
@@ -240,5 +242,43 @@ def get_pdf_bytes(
             for v, w in zip(vals, col_widths):
                 pdf.cell(w, 6, v, border=1)
             pdf.ln()
+
+    # Forecasts table
+    if forecast_df is not None and len(forecast_df) > 0:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 9, "Forecasted Values", ln=True)
+        pdf.set_font("Helvetica", "B", 8)
+
+        # Limit to 6 columns total to fit standard A4 portrait width
+        cols = list(forecast_df.columns)
+        if len(cols) > 6:
+            cols = cols[:6]
+            
+        col_w = 190 / len(cols)
+        
+        # Headers
+        for col in cols:
+            # strip "(Forecast)" to save space
+            c_name = col.replace(" (Forecast)", "")[:18]
+            pdf.cell(col_w, 7, _safe(c_name), border=1)
+        pdf.ln()
+
+        # Rows
+        pdf.set_font("Helvetica", "", 8)
+        for _, row in forecast_df.iterrows():
+            for col in cols:
+                val = row[col]
+                if isinstance(val, (float, np.floating)):
+                    val_str = f"{val:,.2f}"
+                else:
+                    val_str = str(val)[:15]
+                pdf.cell(col_w, 6, _safe(val_str), border=1)
+            pdf.ln()
+        
+        if len(forecast_df.columns) > 6:
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.cell(0, 5, f"* Note: Only the first 5 food items are shown due to page width constraints.", ln=True)
 
     return bytes(pdf.output())

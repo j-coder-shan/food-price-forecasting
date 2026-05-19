@@ -1,6 +1,7 @@
 """
 dashboard/app.py — Sri Lanka AI Food Price & Inflation Forecasting Platform
 Run: streamlit run dashboard/app.py
+Force reload for STGNN
 """
 import sys, warnings, io
 from pathlib import Path
@@ -67,6 +68,13 @@ def _get_food_cols(path_str: str) -> list[str]:
 
 # ── Pipeline runner ────────────────────────────────────────────────────────────
 def run_pipeline(df: pd.DataFrame, cfg: dict) -> dict:
+    import src.utils, src.train, src.evaluate, src.predict
+    import importlib
+    importlib.reload(src.utils)
+    importlib.reload(src.train)
+    importlib.reload(src.evaluate)
+    importlib.reload(src.predict)
+    
     from src.utils import HORIZONS
     from src.train import ModelTrainer
     from src.evaluate import ModelEvaluator
@@ -80,25 +88,30 @@ def run_pipeline(df: pd.DataFrame, cfg: dict) -> dict:
 
     results = {}
     prog    = st.progress(0, text="Initialising pipeline…")
-    errors  = []
+    pipeline_errors = []
 
     for idx, target in enumerate(targets):
         prog.progress(
             int(idx / len(targets) * 95),
             text=f"[{idx+1}/{len(targets)}] Training → {target[:45]}…"
         )
+        target_errors = []
         try:
             trainer = ModelTrainer(df, target)
             trained = trainer.train_all(skip_statistical=skip_st,
                                         selected_models=sel_mdls)
             if not trained:
-                errors.append(f"{target}: no models trained"); continue
+                target_errors.append(f"No models trained successfully")
+                results[target] = {"errors": target_errors}
+                continue
 
             evaluator  = ModelEvaluator(df, target, trained)
             metrics    = evaluator.evaluate_all()
             evaluator.save_metrics()
             if not metrics:
-                errors.append(f"{target}: evaluation failed"); continue
+                target_errors.append(f"Model evaluation failed")
+                results[target] = {"errors": target_errors}
+                continue
 
             best_name, _  = evaluator.best_model()
             preds_df      = evaluator.get_predictions_df()
@@ -113,22 +126,27 @@ def run_pipeline(df: pd.DataFrame, cfg: dict) -> dict:
                     forecaster.save_forecast(fc, best_name, h)
                     forecasts[h] = fc
                 except Exception as fe:
-                    errors.append(f"{target} horizon {h}m: {fe}")
+                    import traceback
+                    target_errors.append(f"Horizon {h}m error: {fe}\n{traceback.format_exc()}")
+                    pipeline_errors.append(f"{target} horizon {h}m: {fe}")
 
             results[target] = dict(
                 best_model=best_name, trained_models=trained,
                 feature_names=feat_names,
                 metrics_df=metrics_df, predictions_df=preds_df,
                 forecasts=forecasts,
+                errors=target_errors,
             )
         except Exception as e:
-            errors.append(f"{target}: {e}")
+            import traceback
+            pipeline_errors.append(f"{target}: {e}")
+            results[target] = {"errors": [f"Pipeline error: {e}\n{traceback.format_exc()}"]}
 
     prog.progress(100, text=f"Done — {len(results)}/{len(targets)} items forecasted.")
 
-    if errors:
-        with st.expander(f"⚠️ {len(errors)} warning(s) during pipeline"):
-            for e in errors:
+    if pipeline_errors:
+        with st.expander(f"⚠️ {len(pipeline_errors)} warning(s) during pipeline"):
+            for e in pipeline_errors:
                 st.caption(f"• {e}")
     return results
 

@@ -141,6 +141,11 @@ class Forecaster:
             temp_df["pct_change_1"] = temp_df[self.target].pct_change(1).fillna(0)
             temp_df["pct_change_3"] = temp_df[self.target].pct_change(3).fillna(0)
 
+            # Copy any missing economic/external features (Fuel/FX) from the last known data point
+            for col in feature_cols:
+                if col not in temp_df.columns:
+                    temp_df[col] = fe_df[col].iloc[-1]
+
             # Get feature row for the last known data point
             last_features = temp_df[feature_cols].iloc[-1].values.reshape(1, -1)
 

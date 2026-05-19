@@ -35,6 +35,14 @@ def render(df: pd.DataFrame, cfg: dict, results: dict) -> None:
     preds_df   = r.get("predictions_df")
     forecasts  = r.get("forecasts", {})
     fc         = forecasts.get(horizon)
+    target_errors = r.get("errors", [])
+
+    if target_errors:
+        st.error(f"⚠️ Errors occurred while processing **{target}**:")
+        for err in target_errors:
+            st.code(err, language="text")
+        if not forecasts:
+            return
 
     # ── KPI row ────────────────────────────────────────────────────────────────
     if metrics_df is not None and len(metrics_df) > 0:
@@ -76,6 +84,22 @@ def render(df: pd.DataFrame, cfg: dict, results: dict) -> None:
     fc_col = f"{target} (Forecast)"
     if fc is not None and fc_col in fc.columns:
         hist = df[target].dropna().tail(36)  # show last 3 years for context
+
+        # ── Forecast Summary Cards ────────────────────────────────────────────────
+        current_price = hist.iloc[-1] if not hist.empty else 0
+        forecast_prices = fc[fc_col].values
+        fc_avg = forecast_prices.mean()
+        fc_max = forecast_prices.max()
+        fc_min = forecast_prices.min()
+        pct_change = ((forecast_prices[-1] - current_price) / current_price * 100) if current_price else 0
+        
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.metric("Forecast Avg", f"LKR {fc_avg:,.2f}")
+        sc2.metric("Forecast Max", f"LKR {fc_max:,.2f}")
+        sc3.metric("Forecast Min", f"LKR {fc_min:,.2f}")
+        sc4.metric("Change (Start to End)", f"{pct_change:+.2f}%", 
+                   delta=f"{pct_change:+.2f}%", delta_color="inverse")
+
         st.plotly_chart(
             forecast_chart(hist, fc, fc_col, best_name, horizon, height=460),
             use_container_width=True, config={"displayModeBar": True},
