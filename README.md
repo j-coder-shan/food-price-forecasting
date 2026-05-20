@@ -117,7 +117,7 @@ python main.py --dashboard
 ### Launch Dashboard Only
 
 ```bash
-streamlit run dashboard.py
+streamlit run dashboard/app.py
 ```
 
 Open [http://localhost:8501](http://localhost:8501) in your browser.
@@ -133,6 +133,7 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 | ML | **XGBoost** | Gradient boosting with early stopping |
 | ML | **LightGBM** | Fast gradient boosting (Microsoft) |
 | ML | **CatBoost** | Categorical boosting (Yandex) |
+| Deep Learning | **ST-GNN** | Spatio-Temporal Graph Neural Network with TCN sequences |
 | Statistical | **ARIMA(1,1,1)** | Auto-regressive integrated moving average |
 | Statistical | **SARIMA(1,1,1)(1,1,1,12)** | Seasonal ARIMA for monthly patterns |
 | Statistical | **Prophet** | Facebook/Meta time-series model |
@@ -153,6 +154,7 @@ For each food item, the following features are created:
 | **Date** | month, quarter, year |
 | **Cyclic** | month_sin, month_cos |
 | **Momentum** | pct_change_1, pct_change_3 |
+| **Macro-Economic** | fuel_lag, usd_lag, fuel_rolling, usd_pct_change |
 
 ---
 
@@ -203,11 +205,11 @@ Example output:
 
 | Tab | Description |
 |---|---|
-| **Historical Trends** | Interactive multi-item price trend chart |
-| **Model Performance** | KPI cards, metrics table, RMSE comparison, actual vs predicted |
-| **Forecast** | Future price chart with ±10% confidence band + CSV download |
-| **Correlations** | Interactive Pearson correlation heatmap |
-| **Seasonal Analysis** | Trend / seasonal / residual decomposition |
+| **Overview** | Interactive multi-item price trend charts and correlation matrix |
+| **Forecast** | Future price charts with confidence bands + actual vs predicted |
+| **Inflation** | KPI gauges, historical inflation table, and future projected inflation |
+| **Model Comparison** | RMSE comparison bars, radar charts, metrics table, and MAE/R2 stats |
+| **Export** | Generate unified PDF Summary Reports and multi-sheet Excel workbooks |
 
 ---
 
@@ -215,12 +217,10 @@ Example output:
 
 This architecture is designed for easy extension with:
 
-- 📉 Inflation rate integration
-- 💱 Exchange rate features (USD/LKR)
-- 🛢️ Global oil price impact
-- 🌐 Spatial-Temporal GNN (ST-GNN) models
-- 📊 Economic indicator dashboards
-- 🤖 LLM-based price explanation
+- 📊 Live database integration (PostgreSQL / Snowflake)
+- ☁️ Cloud deployment (AWS / Google Cloud)
+- 🤖 LLM-based price explanation and automated market reporting
+- 📡 Live API ingestion for daily commodity prices
 
 ---
 

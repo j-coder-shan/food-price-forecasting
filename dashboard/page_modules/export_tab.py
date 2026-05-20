@@ -5,7 +5,7 @@ import streamlit as st
 import importlib
 import src.export
 importlib.reload(src.export)
-from src.export import get_csv_bytes, get_excel_bytes, get_pdf_bytes, build_full_report
+from src.export import get_csv_bytes, get_excel_bytes, get_pdf_bytes, build_full_report, build_macro_summary_report
 from src.inflation import InflationCalculator
 
 
@@ -101,6 +101,24 @@ def render(df: pd.DataFrame, cfg: dict, results: dict) -> None:
              excel_bytes,
              f"sl_food_price_report_{ts}.xlsx",
              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ── Section 2.5: Macro Summary ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("<div class='section-title'>🌍 Overall Pipeline Summary</div>",
+                unsafe_allow_html=True)
+    
+    macro_sheets = build_macro_summary_report(metrics_by_target)
+    if macro_sheets:
+        macro_excel_bytes = get_excel_bytes(macro_sheets)
+        st.download_button(
+            "📥 Export Overall Pipeline Summary Report (.xlsx)",
+            data=macro_excel_bytes,
+            file_name=f"overall_macro_summary_{ts}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary"
+        )
+        st.info("Contains **Overall_Summary** (averages across all items) and **Item_Level_Breakdown**.")
 
     # ── Section 3: PDF ─────────────────────────────────────────────────────────
     st.markdown("---")

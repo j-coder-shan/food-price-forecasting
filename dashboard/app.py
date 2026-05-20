@@ -164,7 +164,7 @@ def main():
             <div>
                 <h1 style="margin:0;font-family:Poppins,sans-serif;font-weight:800;
                            font-size:1.55rem;color:#F1F5F9;line-height:1.2;">
-                    🇱🇰 Sri Lanka Food Price &amp; Inflation AI
+                    🇱🇰 Sri Lanka Food Price &amp; Inflation
                 </h1>
                 <p style="margin:4px 0 0;color:#64748B;font-size:0.82rem;">
                     Multi-model forecasting &nbsp;·&nbsp; Fuel &amp; FX integration &nbsp;·&nbsp;
@@ -175,7 +175,7 @@ def main():
                 <div style="background:#1A2238;border:1px solid #1E2D4A;border-radius:8px;
                             padding:6px 14px;text-align:center;">
                     <div style="font-size:0.65rem;color:#64748B;text-transform:uppercase;">Models</div>
-                    <div style="font-family:Poppins;font-weight:700;color:#3B82F6;font-size:1.1rem;">7</div>
+                    <div style="font-family:Poppins;font-weight:700;color:#3B82F6;font-size:1.1rem;">8</div>
                 </div>
                 <div style="background:#1A2238;border:1px solid #1E2D4A;border-radius:8px;
                             padding:6px 14px;text-align:center;">

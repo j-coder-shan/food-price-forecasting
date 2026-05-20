@@ -136,3 +136,58 @@ def render(df: pd.DataFrame, results: dict) -> None:
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Feature importance not available for this model.")
+
+    # ── Macro-Aggregation (Overall Performance) ────────────────────────────────
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>🌍 Overall Model Performance (All Selected Items)</div>",
+                unsafe_allow_html=True)
+    
+    # Gather all metrics into a flat dataframe
+    all_metrics = []
+    for t_name, r_data in results.items():
+        m_df = r_data.get("metrics_df")
+        if m_df is not None and not m_df.empty:
+            df_copy = m_df.copy()
+            df_copy["Food Item"] = t_name
+            all_metrics.append(df_copy)
+            
+    if not all_metrics:
+        st.warning("No metrics available for aggregation.")
+        return
+        
+    master_df = pd.concat(all_metrics, ignore_index=True)
+    
+    # Group by Model and average the metrics
+    macro_df = master_df.groupby("Model").agg({
+        "MAE": "mean",
+        "RMSE": "mean",
+        "MAPE": "mean",
+        "R2": "mean"
+    }).reset_index()
+    
+    # Overall Ranking Table
+    st.markdown("#### Macro-Average Metrics")
+    macro_rank_df = _ranking_table(macro_df)
+    st.dataframe(
+        macro_rank_df.style
+            .background_gradient(subset=["RMSE"], cmap="RdYlGn_r")
+            .background_gradient(subset=["R2"],   cmap="RdYlGn")
+            .format({"RMSE": "{:.3f}", "MAE": "{:.3f}",
+                     "MAPE": "{:.2f}%", "R2": "{:.4f}"}),
+        use_container_width=True, hide_index=True,
+    )
+    
+    st.markdown("---")
+    
+    # Overall Charts
+    c_left, c_right = st.columns(2)
+    c_left.markdown("#### Avg RMSE Comparison", unsafe_allow_html=True)
+    c_left.plotly_chart(rmse_bar(macro_df, "All Selected Items", height=330), use_container_width=True)
+    
+    macro_radar = _radar_chart(macro_df, "All Selected Items")
+    if macro_radar:
+        c_right.markdown("#### Radar — Macro Normalised Metrics", unsafe_allow_html=True)
+        c_right.plotly_chart(macro_radar, use_container_width=True)
+    else:
+        c_right.plotly_chart(multi_metric_bar(macro_df, "All Selected Items", height=330), use_container_width=True)
+

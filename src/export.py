@@ -150,6 +150,40 @@ def build_full_report(
     return sheets
 
 
+def build_macro_summary_report(metrics_by_target: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """
+    Builds the macro-averaged Overall Pipeline Summary Report.
+    Returns a dict with 'Overall_Summary' and 'Item_Level_Breakdown' sheets.
+    """
+    all_metrics = []
+    for target, metrics_df in metrics_by_target.items():
+        if metrics_df is not None and not metrics_df.empty:
+            df_copy = metrics_df.copy()
+            # Ensure Food Item is the first column
+            if "Food Item" not in df_copy.columns:
+                df_copy.insert(0, "Food Item", target)
+            all_metrics.append(df_copy)
+            
+    if not all_metrics:
+        return {}
+        
+    master_df = pd.concat(all_metrics, ignore_index=True)
+    
+    # Macro Average
+    macro_df = master_df.groupby("Model").agg({
+        "MAE": "mean",
+        "RMSE": "mean",
+        "MAPE": "mean",
+        "R2": "mean"
+    }).reset_index().sort_values("RMSE")
+    
+    return {
+        "Overall_Summary": macro_df,
+        "Item_Level_Breakdown": master_df
+    }
+
+
+
 # ─────────────────────────────────────────────
 # PDF Report (optional — requires fpdf2)
 # ─────────────────────────────────────────────
