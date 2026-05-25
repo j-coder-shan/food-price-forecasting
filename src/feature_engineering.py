@@ -86,6 +86,19 @@ class FeatureEngineer:
             df[f"rolling_min_{window}"] = roll.min()
         return df
 
+    def _create_ewma_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Creates Exponentially Weighted Moving Averages (EWMA)."""
+        for span in ROLLING_WINDOWS:
+            df[f"ewma_{span}"] = df[self.target].ewm(span=span, adjust=False).mean()
+        return df
+
+    def _create_volatility_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Creates rolling volatility of percentage changes."""
+        pct_change = df[self.target].pct_change(1).fillna(0)
+        for window in ROLLING_WINDOWS:
+            df[f"volatility_{window}"] = pct_change.rolling(window=window, min_periods=1).std().fillna(0)
+        return df
+
     def _create_date_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Creates temporal date features from the DatetimeIndex."""
         df["month"] = df.index.month
@@ -135,6 +148,13 @@ class FeatureEngineer:
             df["usd_rolling_mean_3"]  = fx.rolling(3, min_periods=1).mean()
             df["usd_pct_change"]      = fx.pct_change(1).fillna(0)
 
+        # Interaction Terms (if both are present)
+        if FUEL_COL in self.df.columns and EXCHANGE_COL in self.df.columns:
+            # Local cost of fuel proxy
+            local_fuel = self.df[FUEL_COL] * self.df[EXCHANGE_COL]
+            df["local_fuel_lag_1"] = local_fuel.shift(1)
+            df["local_fuel_pct_change"] = local_fuel.pct_change(1).fillna(0)
+
         return df
 
     def build_features(self) -> pd.DataFrame:
@@ -146,6 +166,8 @@ class FeatureEngineer:
 
         df = self._create_lag_features(df)
         df = self._create_rolling_features(df)
+        df = self._create_ewma_features(df)
+        df = self._create_volatility_features(df)
         df = self._create_date_features(df)
         df = self._create_momentum_features(df)
         df = self._create_economic_features(df)   # fuel + FX (if available)

@@ -174,9 +174,19 @@ def render_sidebar(food_cols: list[str]) -> dict:
                 help="Window sizes for rolling mean/std features.",
             )
 
+        # ── 5. Advanced ST-GNN (Multi-Target) ──────────────────────────────────
+        with st.expander("🧠 Advanced ST-GNN Mode", expanded=False):
+            st.markdown("<span style='font-size:0.8rem;color:#94A3B8;'>Enable Graph-based Multi-Target forecasting for Prices, Demand, and Inflation simultaneously.</span>", unsafe_allow_html=True)
+            cfg["use_stgnn"] = st.toggle("Enable Advanced ST-GNN", value=False)
+            if cfg["use_stgnn"]:
+                st.info("⚠️ This will bypass traditional ML models and use the `src.stgnn` pipeline.")
+                cfg["stgnn_epochs"] = st.number_input("ST-GNN Epochs", 10, 500, 200, step=10)
+            else:
+                cfg["stgnn_epochs"] = 200
+
         st.markdown("---")
 
-        # ── 5. Generate Button ─────────────────────────────────────────────────
+        # ── 6. Generate Button ─────────────────────────────────────────────────
         btn_disabled = (not cfg["selected_targets"] or not cfg["selected_models"])
         cfg["run"] = st.button(
             "🚀  Generate Forecast",

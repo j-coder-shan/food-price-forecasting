@@ -7,6 +7,10 @@ import sys
 import os
 sys.path.insert(0, ".")
 os.environ["PYTHONIOENCODING"] = "utf-8"
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 
 from src.preprocessing import DataPreprocessor
 from src.feature_engineering import FeatureEngineer

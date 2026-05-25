@@ -68,7 +68,12 @@ def render(df: pd.DataFrame, results: dict) -> None:
         </div>""", unsafe_allow_html=True)
         return
 
-    target = st.selectbox("📌 Select food item", list(results.keys()), key="cmp_target")
+    valid_targets = [k for k in results.keys() if k not in ("stgnn_graph", "stgnn_demand")]
+    if not valid_targets:
+        st.warning("No valid food items found in results.")
+        return
+        
+    target = st.selectbox("📌 Select food item", valid_targets, key="cmp_target")
     r          = results.get(target, {})
     metrics_df = r.get("metrics_df")
     preds_df   = r.get("predictions_df")
@@ -145,6 +150,8 @@ def render(df: pd.DataFrame, results: dict) -> None:
     # Gather all metrics into a flat dataframe
     all_metrics = []
     for t_name, r_data in results.items():
+        if t_name in ("stgnn_graph", "stgnn_demand") or not isinstance(r_data, dict):
+            continue
         m_df = r_data.get("metrics_df")
         if m_df is not None and not m_df.empty:
             df_copy = m_df.copy()

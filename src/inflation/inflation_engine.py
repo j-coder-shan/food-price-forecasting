@@ -1,5 +1,5 @@
 """
-inflation.py  —  Inflation calculation from Food Price Index.
+inflation_engine.py  —  Inflation calculation from Food Price Index.
 Sri Lanka AI Food Price & Inflation Forecasting Platform
 
 Formulas:

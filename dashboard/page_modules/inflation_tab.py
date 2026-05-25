@@ -1,4 +1,3 @@
-"""dashboard/page_modules/inflation_tab.py — Tab 3: Inflation Analysis."""
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -7,6 +6,13 @@ from dashboard.styles.theme import (
     get_chart_layout, compact_layout,
     ACCENT_GREEN, ACCENT_RED, ACCENT_AMBER, ACCENT_CYAN, ACCENT_BLUE,
     BG_CARD, TEXT_PRIMARY, TEXT_SECONDARY, BORDER,
+)
+from src.inflation import (
+    InflationCalculator,
+    FoodIndexCalculator,
+    plot_index_comparison,
+    plot_inflation_comparison,
+    plot_contribution_analysis,
 )
 
 
@@ -113,7 +119,7 @@ def render(df: pd.DataFrame, results: dict) -> None:
     # ── Forecasted Inflation ───────────────────────────────────────────────────
     if results and "Index" in results:
         st.markdown("---")
-        st.markdown("<div class='section-title'>🔮 Forecasted Inflation</div>",
+        st.markdown("<div class='section-title'>🔮 Forecasted Inflation Analysis</div>",
                     unsafe_allow_html=True)
         r = results["Index"]
         fc_dict = r.get("forecasts", {})
@@ -129,37 +135,66 @@ def render(df: pd.DataFrame, results: dict) -> None:
             last_known  = float(df["Index"].dropna().iloc[-1])
             hist_series = df["Index"].dropna()
 
-            from src.inflation import InflationCalculator as IC
-            fc_inf = IC.forecast_inflation(fc_series, last_known, hist_series)
+            fc_inf = InflationCalculator.forecast_inflation(fc_series, last_known, hist_series)
             fc_inf_clean = fc_inf.copy()
             fc_inf_clean["Monthly_Inflation_%"] = fc_inf_clean["Monthly_Inflation_%"].round(3)
             fc_inf_clean["YoY_Inflation_%"]     = fc_inf_clean["YoY_Inflation_%"].round(3)
 
-            # Stitched inflation chart
-            layout = compact_layout(
-                title=f"Historical + {h}m Forecasted Monthly Inflation (%)",
-                xaxis_title="Month", yaxis_title="Inflation (%)", height=360,
-            )
-            fig = go.Figure()
-            fig.update_layout(**layout)
-            fig.add_trace(go.Scatter(
-                x=mom.index, y=mom.values, name="Historical",
-                line=dict(color=ACCENT_GREEN, width=2), fill="tozeroy",
-                fillcolor="rgba(16,185,129,0.06)",
-                hovertemplate="%{x|%b %Y}: %{y:.2f}%<extra>Historical</extra>",
-            ))
-            fig.add_trace(go.Scatter(
-                x=pd.to_datetime(fc_inf["Month"]),
-                y=fc_inf["Monthly_Inflation_%"],
-                name=f"{h}m Forecast",
-                line=dict(color=ACCENT_AMBER, width=2.5, dash="dash"),
-                hovertemplate="%{x|%b %Y}: %{y:.2f}%<extra>Forecast</extra>",
-            ))
-            fig.add_hline(y=0, line_dash="dot", line_color=TEXT_SECONDARY,
-                          line_width=1, opacity=0.5)
-            st.plotly_chart(fig, use_container_width=True)
+            # ── Projected KPI Metrics ───────────────────────────────────────────
+            c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+            c_p1.metric("Projected YoY (End)", f"{fc_inf['YoY_Inflation_%'].iloc[-1]:.2f}%")
+            c_p2.metric("Projected MoM (End)", f"{fc_inf['Monthly_Inflation_%'].iloc[-1]:.2f}%")
+            c_p3.metric("Peak Projected YoY", f"{fc_inf['YoY_Inflation_%'].max():.2f}%")
+            c_p4.metric("Avg Projected YoY", f"{fc_inf['YoY_Inflation_%'].mean():.2f}%")
 
-            # Table + download
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+            # ── Multi-column charts ─────────────────────────────────────────────
+            col1, col2 = st.columns(2)
+            with col1:
+                st.plotly_chart(
+                    plot_index_comparison(
+                        hist_series.tail(36),
+                        fc_df,
+                        r.get("best_model", "Dynamic Basket"),
+                        h,
+                        height=360
+                    ),
+                    use_container_width=True
+                )
+            with col2:
+                st.plotly_chart(
+                    plot_inflation_comparison(
+                        hist_table.tail(36),
+                        fc_inf,
+                        r.get("best_model", "Dynamic Basket"),
+                        h,
+                        height=360
+                    ),
+                    use_container_width=True
+                )
+
+            # ── Contribution Analysis Card ──────────────────────────────────────
+            st.markdown("<div class='section-title'>🍽️ Food Contribution Analysis</div>",
+                        unsafe_allow_html=True)
+            st.markdown(
+                "<p style='font-size:0.82rem;color:#64748B;margin-top:-6px;margin-bottom:12px;'>"
+                "This chart shows the index points contribution of individual food items to the projected food price index change over the forecast horizon. "
+                "Price increases (positive contribution) push index up (Red), while price decreases (negative contribution) pull it down (Green)."
+                "</p>",
+                unsafe_allow_html=True
+            )
+            
+            try:
+                calc_inst = FoodIndexCalculator(df)
+                fig_contrib = plot_contribution_analysis(calc_inst, results, h, top_n=15, height=440)
+                st.plotly_chart(fig_contrib, use_container_width=True)
+            except Exception as ce:
+                st.error(f"Failed to generate contribution analysis: {ce}")
+
+            # ── Forecast Values Table ───────────────────────────────────────────
+            st.markdown("<div class='section-title'>📋 Forecasted Index & Inflation Table</div>",
+                        unsafe_allow_html=True)
             st.dataframe(
                 fc_inf_clean.style.background_gradient(
                     subset=["Monthly_Inflation_%"], cmap="RdYlGn_r"
@@ -170,6 +205,7 @@ def render(df: pd.DataFrame, results: dict) -> None:
                 "⬇️ Download Inflation Forecast CSV",
                 data=fc_inf_clean.to_csv(index=False).encode("utf-8"),
                 file_name=f"inflation_forecast_{h}m.csv", mime="text/csv",
+                use_container_width=True,
             )
     else:
         st.info("Include **Index** in the selected targets and run forecast to see projected inflation.")

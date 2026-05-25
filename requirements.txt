@@ -40,3 +40,7 @@ fpdf2>=2.7.0
 # Optional: SHAP (feature explainability)
 # shap>=0.44.0
 torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+torch_geometric>=2.3.0
+networkx>=3.1

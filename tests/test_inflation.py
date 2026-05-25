@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.inflation import InflationCalculator
+from src.inflation import InflationCalculator, FoodIndexCalculator, load_weights_map
 
 
 @pytest.fixture
@@ -69,3 +69,56 @@ def test_forecast_inflation():
     assert len(result) == 6
     assert "Monthly_Inflation_%" in result.columns
     assert "Forecasted_Index"    in result.columns
+
+
+def test_load_weights_map():
+    # Test weights mapping behaves correctly with simulated food columns
+    test_cols = ["bandakka", "cabbage leave", "Index", "Unknown Food Item"]
+    weights = load_weights_map(price_columns=test_cols)
+    
+    assert "bandakka" in weights
+    assert "cabbage leave" in weights
+    assert "Unknown Food Item" in weights
+    assert "Index" not in weights
+    # Mapped weights normalized to 1.0
+    assert abs(sum(weights.values()) - 1.0) < 1e-9
+
+
+def test_food_index_calculator():
+    # Test index calculator on synthetic data
+    dates = pd.date_range("2021-01-01", periods=12, freq="MS")
+    hist_df = pd.DataFrame({
+        "bandakka": [100.0] * 12,
+        "cabbage leave": [200.0] * 12,
+    }, index=dates)
+    
+    # Init calculator
+    calc = FoodIndexCalculator(hist_df)
+    
+    # Base prices should be average of 2021
+    assert calc.base_prices["bandakka"] == 100.0
+    assert calc.base_prices["cabbage leave"] == 200.0
+    
+    # Historical index should be 100 since all values are at their base price
+    hist_idx = calc.calculate_historical_index()
+    assert all(abs(hist_idx - 100.0) < 1e-9)
+    
+    # Test future index with prediction results
+    # Predict bandakka to rise to 150 (50% increase) and cabbage leaves constant
+    results = {
+        "bandakka": {
+            "forecasts": {
+                3: pd.DataFrame({
+                    "Month": ["2022-01", "2022-02", "2022-03"],
+                    "bandakka (Forecast)": [150.0, 150.0, 150.0]
+                })
+            }
+        }
+    }
+    
+    fc_idx = calc.calculate_future_index(results, horizon=3)
+    assert len(fc_idx) == 3
+    assert "Index (Forecast)" in fc_idx.columns
+    # The forecasted index should reflect the weighted increase
+    assert all(fc_idx["Index (Forecast)"] > 100.0)
+    assert all(fc_idx["Index (Forecast)"] < 150.0)

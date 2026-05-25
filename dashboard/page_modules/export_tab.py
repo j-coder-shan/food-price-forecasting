@@ -34,25 +34,42 @@ def render(df: pd.DataFrame, cfg: dict, results: dict) -> None:
     ts      = datetime.now().strftime("%Y%m%d_%H%M")
 
     # Build report sheets
-    forecasts_by_target = {t: r.get("forecasts", {}) for t, r in results.items()}
-    metrics_by_target   = {t: r.get("metrics_df")   for t, r in results.items()}
+    forecasts_by_target = {t: r.get("forecasts", {}) for t, r in results.items() if t not in ("stgnn_graph", "stgnn_demand")}
+    metrics_by_target   = {t: r.get("metrics_df")   for t, r in results.items() if t not in ("stgnn_graph", "stgnn_demand")}
 
     inf_table = None
     inf_summary = None
+    fc_inf_table = None
     if "Index" in df.columns:
         calc      = InflationCalculator(df["Index"])
         inf_table = calc.inflation_table().reset_index()
         inf_table["Month"] = inf_table["Month"].dt.strftime("%Y-%m")
         inf_summary = calc.summary()
+        
+        # Calculate forecasted inflation to include in report
+        if "Index" in results:
+            r = results["Index"]
+            fc_dict = r.get("forecasts", {})
+            h = max(fc_dict.keys()) if fc_dict else None
+            if h and f"Index (Forecast)" in fc_dict[h].columns:
+                fc_df = fc_dict[h]
+                fc_series = pd.Series(
+                    fc_df["Index (Forecast)"].values,
+                    index=pd.to_datetime(fc_df["Month"]),
+                    name="Index",
+                )
+                last_known  = float(df["Index"].dropna().iloc[-1])
+                hist_series = df["Index"].dropna()
+                fc_inf_table = InflationCalculator.forecast_inflation(fc_series, last_known, hist_series)
 
     report_sheets = build_full_report(
-        forecasts_by_target, metrics_by_target, inf_table, horizon
+        forecasts_by_target, metrics_by_target, inf_table, horizon, fc_inf_table
     )
 
     # ── Section 1: Per-item CSV ────────────────────────────────────────────────
     st.markdown("<div class='section-title'>📌 Per-Item Forecast Download</div>",
                 unsafe_allow_html=True)
-    targets = list(results.keys())
+    targets = [t for t in results.keys() if t not in ("stgnn_graph", "stgnn_demand")]
     target  = st.selectbox("Select food item", targets, key="exp_target")
     r = results.get(target, {})
     avail_h = sorted(r.get("forecasts", {}).keys())

@@ -68,9 +68,11 @@ def _get_food_cols(path_str: str) -> list[str]:
 
 # ── Pipeline runner ────────────────────────────────────────────────────────────
 def run_pipeline(df: pd.DataFrame, cfg: dict) -> dict:
-    import src.utils, src.train, src.evaluate, src.predict
+    import src.utils, src.models.gnn, src.models.hybrid, src.train, src.evaluate, src.predict
     import importlib
     importlib.reload(src.utils)
+    importlib.reload(src.models.gnn)
+    importlib.reload(src.models.hybrid)
     importlib.reload(src.train)
     importlib.reload(src.evaluate)
     importlib.reload(src.predict)
@@ -80,15 +82,24 @@ def run_pipeline(df: pd.DataFrame, cfg: dict) -> dict:
     from src.evaluate import ModelEvaluator
     from src.predict import Forecaster
 
-    targets  = cfg["selected_targets"]
+    targets  = [t for t in cfg["selected_targets"] if t != "Index"]
+    if not targets:
+        st.error("Please select at least one food item to forecast in addition to 'Index'.")
+        return {}
+
     sel_mdls = cfg["selected_models"]
     skip_st  = cfg["skip_statistical"]
     horizon  = cfg["horizon"]
     all_h    = sorted(set(HORIZONS + [horizon]))
 
+    import src.inflation
+    importlib.reload(src.inflation)
+    from src.inflation import FoodIndexCalculator
+
     results = {}
     prog    = st.progress(0, text="Initialising pipeline…")
     pipeline_errors = []
+
 
     for idx, target in enumerate(targets):
         prog.progress(
@@ -141,6 +152,123 @@ def run_pipeline(df: pd.DataFrame, cfg: dict) -> dict:
             import traceback
             pipeline_errors.append(f"{target}: {e}")
             results[target] = {"errors": [f"Pipeline error: {e}\n{traceback.format_exc()}"]}
+
+    # --- ADVANCED ST-GNN INJECTION ---
+    if cfg.get("use_stgnn"):
+        st.info("🧠 Running Advanced ST-GNN Multi-Target Pipeline...")
+        try:
+            import src.stgnn.demand_forecasting
+            import src.stgnn.adjacency
+            import src.stgnn.stgnn_model
+            import src.stgnn.graph_visualization
+            import importlib
+            importlib.reload(src.stgnn.demand_forecasting)
+            importlib.reload(src.stgnn.adjacency)
+            importlib.reload(src.stgnn.stgnn_model)
+            importlib.reload(src.stgnn.graph_visualization)
+            
+            from src.stgnn.demand_forecasting import DemandForecaster
+            from src.stgnn.adjacency import EconomicGraphBuilder
+            from src.stgnn.stgnn_model import AdvancedSTGNNRegressor
+            from src.stgnn.graph_visualization import plot_economic_graph
+            import pandas as pd
+            import numpy as np
+
+            # 1. Generate Demand Scores
+            forecaster = DemandForecaster(df)
+            demand_df = forecaster.generate_synthetic_demand()
+            
+            # 2. Build and Render Graph
+            builder = EconomicGraphBuilder(df, demand_df)
+            G = builder.build_correlation_graph()
+            graph_fig = plot_economic_graph(G)
+            st.session_state["stgnn_graph"] = graph_fig
+            
+            # 3. Train Model
+            stgnn_model = AdvancedSTGNNRegressor(epochs=cfg.get("stgnn_epochs", 50))
+            stgnn_model.fit(df, targets, demand_df)
+            
+            # 4. Predict Future (always predict at least 3 steps for the 3-month demand view)
+            predict_steps = max(3, cfg["horizon"])
+            preds = stgnn_model.predict_future(steps=predict_steps)
+            
+            # 5. Store Demand outputs (extract first 3 months)
+            future_demands = []
+            for i in range(3):
+                if i < len(preds['demands']):
+                    series = pd.Series(preds['demands'][i], index=[f"{c}_Demand" for c in targets])
+                    future_demands.append(series)
+            
+            st.session_state["stgnn_demand"] = {
+                "historical": demand_df,
+                "forecast": future_demands
+            }
+            
+            # Overwrite the target forecasts with ST-GNN predictions to show up in the main UI
+            for idx, tgt in enumerate(targets):
+                if tgt not in results:
+                    results[tgt] = {"errors": [], "forecasts": {}}
+                
+                if "forecasts" not in results[tgt]:
+                    results[tgt]["forecasts"] = {}
+                
+                # Extract predicted price curve for this target (limit to user's selected horizon)
+                future_prices = [p[idx] for p in preds['prices']][:cfg["horizon"]]
+                future_dates = pd.date_range(start=df.index[-1] + pd.DateOffset(months=1), periods=cfg["horizon"], freq='MS')
+                
+                stgnn_fc_df = pd.DataFrame({
+                    "Month": future_dates.strftime("%Y-%m"),
+                    f"{tgt} (Forecast)": future_prices
+                })
+                
+                results[tgt]["forecasts"][cfg["horizon"]] = stgnn_fc_df
+                results[tgt]["best_model"] = "ST-GNN (Advanced)"
+                if "trained_models" not in results[tgt]:
+                    results[tgt]["trained_models"] = {"ST-GNN (Advanced)": stgnn_model}
+                else:
+                    results[tgt]["trained_models"]["ST-GNN (Advanced)"] = stgnn_model
+                    
+            st.success("✅ ST-GNN Pipeline Complete!")
+            
+        except Exception as e:
+            import traceback
+            st.error(f"ST-GNN Execution Failed: {e}\n{traceback.format_exc()}")
+    # ---------------------------------
+
+    # --- DYNAMIC FOOD INDEX & INFLATION INJECTION ---
+    if "Index" in df.columns:
+        st.info("📊 Computing Dynamic Food Price Index (Laspeyres)...")
+        try:
+            calculator = FoodIndexCalculator(df)
+            
+            # Find all horizons predicted in results
+            run_horizons = set()
+            for tgt in targets:
+                if tgt in results and "forecasts" in results[tgt]:
+                    run_horizons.update(results[tgt]["forecasts"].keys())
+            
+            if not run_horizons:
+                run_horizons = {horizon}
+                
+            index_forecasts = {}
+            for h in run_horizons:
+                index_forecasts[h] = calculator.calculate_future_index(results, h)
+                
+            results["Index"] = dict(
+                best_model="Dynamic Basket Index",
+                trained_models={},
+                feature_names=[],
+                metrics_df=pd.DataFrame(),
+                predictions_df=pd.DataFrame(),
+                forecasts=index_forecasts,
+                errors=[],
+            )
+            st.success("✅ Dynamic Food Price Index computed!")
+        except Exception as e:
+            import traceback
+            st.error(f"Dynamic Index calculation failed: {e}\n{traceback.format_exc()}")
+            pipeline_errors.append(f"Dynamic Index: {e}")
+    # ------------------------------------------------
 
     prog.progress(100, text=f"Done — {len(results)}/{len(targets)} items forecasted.")
 
@@ -225,8 +353,9 @@ def main():
 
     # ── Run pipeline ─────────────────────────────────────────────────────────────
     if cfg["run"]:
-        if not cfg["selected_targets"]:
-            st.error("Select at least one food item in the sidebar."); st.stop()
+        targets_to_forecast = [t for t in cfg["selected_targets"] if t != "Index"]
+        if not targets_to_forecast:
+            st.error("Please select at least one food item to forecast in the sidebar (in addition to 'Index')."); st.stop()
         if not cfg["selected_models"]:
             st.error("Select at least one model in the sidebar."); st.stop()
         with st.spinner("Running forecasting pipeline — this may take a few minutes…"):
@@ -247,12 +376,16 @@ def main():
     from dashboard.page_modules.inflation_tab import render as r_inflation
     from dashboard.page_modules.model_compare import render as r_compare
     from dashboard.page_modules.export_tab    import render as r_export
+    from dashboard.page_modules.demand_tab    import render as r_demand
+    from dashboard.page_modules.graph_tab     import render as r_graph
 
     tabs = st.tabs([
         "📈  Overview",
         "🔮  Forecast",
         "📉  Inflation",
         "🏆  Model Comparison",
+        "🔥  Demand",
+        "🕸  Economic Graph",
         "⬇️  Export",
     ])
 
@@ -260,7 +393,9 @@ def main():
     with tabs[1]: r_forecast(df_s, cfg_s, results)
     with tabs[2]: r_inflation(df_s, results)
     with tabs[3]: r_compare(df_s, results)
-    with tabs[4]: r_export(df_s, cfg_s, results)
+    with tabs[4]: r_demand(df_s, results)
+    with tabs[5]: r_graph(results)
+    with tabs[6]: r_export(df_s, cfg_s, results)
 
 
 if __name__ == "__main__":

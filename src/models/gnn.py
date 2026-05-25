@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,115 +7,137 @@ from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.preprocessing import StandardScaler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
+from pathlib import Path
+from torch_geometric.nn import GATv2Conv
+from src.utils import get_food_columns
 
-class AdvancedGraphStructureLearner(nn.Module):
-    """Learns dynamic spatial correlations between macroeconomic and lag nodes."""
-    def __init__(self, n_nodes, embed_dim=16, top_k=8):
-        super().__init__()
-        self.node_emb = nn.Embedding(n_nodes, embed_dim)
-        self.top_k = min(top_k, n_nodes - 1) if n_nodes > 1 else 0
+# ==========================================
+# 1. FiLM (Feature-wise Linear Modulation)
+# ==========================================
+class FiLM(nn.Module):
+    """
+    Feature-wise Linear Modulation layer.
+    Scales and shifts spatial hidden states using global macroeconomic context.
+    """
+    def __init__(self, global_dim, feature_dim):
+        super(FiLM, self).__init__()
+        self.gamma = nn.Linear(global_dim, feature_dim)
+        self.beta = nn.Linear(global_dim, feature_dim)
 
-    def forward(self):
-        e = F.normalize(self.node_emb.weight, dim=-1)
-        sim = torch.mm(e, e.T)
+    def forward(self, x, global_features):
+        # x: [Batch, Timesteps, Nodes, Feature_Dim]
+        # global_features: [Batch, Timesteps, Global_Dim]
+        gf = global_features.unsqueeze(2) # Shape: [Batch, Timesteps, 1, Global_Dim]
+        g = torch.sigmoid(self.gamma(gf)) # Shape: [Batch, Timesteps, 1, Feature_Dim]
+        b = self.beta(gf)                 # Shape: [Batch, Timesteps, 1, Feature_Dim]
+        return g * x + b
+
+
+# ==========================================
+# 2. Multi-Target STGNN (Vectorized GATv2)
+# ==========================================
+class MultiTargetSTGNN(nn.Module):
+    """
+    Vectorized Multi-Target ST-GNN.
+    - Treats all 145 commodities as nodes in a shared spatial graph.
+    - Captures cross-commodity relationships via GATv2 neighborhood message passing.
+    - Integrates global macroeconomic indicators via FiLM context conditioning.
+    - Shared temporal GRU models time dependencies independently per node.
+    """
+    def __init__(self, n_nodes, in_dim, gcn_hidden, gru_hidden, global_dim=3):
+        super(MultiTargetSTGNN, self).__init__()
+        self.n_nodes = n_nodes
+        self.gcn1 = GATv2Conv(in_dim, gcn_hidden, edge_dim=1, heads=1, concat=False)
+        self.gcn2 = GATv2Conv(gcn_hidden, gcn_hidden, edge_dim=1, heads=1, concat=False)
         
-        if self.top_k > 0:
-            mask = torch.zeros_like(sim)
-            mask.scatter_(1, sim.topk(self.top_k + 1, dim=-1).indices, 1)
-            mask.fill_diagonal_(0)
-            A = sim * mask
-        else:
-            A = sim
-        return A / A.sum(dim=-1, keepdim=True).clamp(min=1e-6)
-
-class TemporalConvNet(nn.Module):
-    """Dilated 1D convolutions with causal padding and Gated Linear Units (GLU)."""
-    def __init__(self, in_channels, out_channels, kernel_size=2, dilation=1):
-        super().__init__()
-        self.padding = (kernel_size - 1) * dilation
-        self.conv = nn.Conv1d(in_channels, out_channels * 2, kernel_size, 
-                              padding=self.padding, dilation=dilation)
-        self.glu = nn.GLU(dim=1)
-
-    def forward(self, x):
-        # x: (Batch * Nodes, Features, Timesteps)
-        out = self.conv(x)
-        out = out[:, :, :-self.padding] if self.padding > 0 else out
-        return self.glu(out)
-
-class STGCNLayer(nn.Module):
-    """Spatio-Temporal layer handling sequences over graphs."""
-    def __init__(self, in_dim, out_dim, dropout=0.2):
-        super().__init__()
-        self.tcn = TemporalConvNet(in_dim, out_dim)
-        self.gcn_weight = nn.Linear(out_dim, out_dim)
-        self.norm = nn.LayerNorm(out_dim)
-        self.drop = nn.Dropout(dropout)
-
-    def forward(self, H, A):
-        # H shape: (Batch, Nodes, Timesteps, Feature_Dim)
-        B, N, T, F_in = H.shape
+        self.norm1 = nn.LayerNorm(gcn_hidden)
+        self.norm2 = nn.LayerNorm(gcn_hidden)
         
-        # Temporal Conv per node
-        h_t = H.view(B * N, F_in, T)
-        h_t = self.tcn(h_t) # (B*N, out_dim, T)
-        h_t = h_t.view(B, N, -1, T).permute(0, 3, 1, 2) # (B, T, N, out_dim)
-        
-        # Expand Adjacency matrix across batch dimension
-        A_expanded = A.unsqueeze(0).expand(B, -1, -1)
-        
-        # Graph convolution per timestep
-        out = []
-        for t in range(T):
-            g_out = torch.bmm(A_expanded, h_t[:, t, :, :])
-            out.append(self.gcn_weight(g_out).unsqueeze(1))
-            
-        out = torch.cat(out, dim=1) # (B, T, N, out_dim)
-        out = self.norm(out)
-        return F.relu(self.drop(out)).permute(0, 2, 1, 3) # (B, N, T, out_dim)
-
-class AdvancedSTGNNExtractor(nn.Module):
-    def __init__(self, n_nodes, seq_len=6, in_dim=1, out_dim=32):
-        super().__init__()
-        self.gsl = AdvancedGraphStructureLearner(n_nodes, top_k=min(8, n_nodes))
-        self.stgcn = STGCNLayer(in_dim, out_dim)
-        
-        # Flatten structural nodes AND temporal dimension
-        self.head = nn.Sequential(
-            nn.Linear(n_nodes * seq_len * out_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 1)
+        self.film = FiLM(global_dim, gcn_hidden)
+        self.shared_gru = nn.GRU(
+            input_size=gcn_hidden,
+            hidden_size=gru_hidden,
+            num_layers=1,
+            batch_first=True
         )
+        self.forecast_head = nn.Linear(gru_hidden, 1)
 
-    def forward(self, x):
-        # x input shape: (Batch, Nodes, Timesteps, Feature_Dim)
-        A = self.gsl()
-        H = self.stgcn(x, A) # Shape: (Batch, Nodes, Timesteps, out_dim)
-        
-        # Flatten representations
-        emb = H.reshape(H.size(0), -1)
-        return self.head(emb)
-
-class CombinedRobustLoss(nn.Module):
-    def __init__(self, alpha=1.0, beta=0.2):
-        super().__init__()
-        self.alpha = alpha
-        self.beta = beta
-        self.smooth_l1 = nn.SmoothL1Loss()
-
-    def forward(self, y_pred, y_true):
-        l1_loss = self.smooth_l1(y_pred, y_true)
-        mask = y_true != 0
-        if mask.sum() > 0:
-            mape_loss = torch.mean(torch.abs((y_true[mask] - y_pred[mask]) / y_true[mask]))
+    def forward(self, x, adj, global_macro):
+        # x: [B_N, T, In_Dim] where B_N = Batch * Nodes
+        # adj: can be a tuple (edge_index, edge_weight) or just edge_index
+        # global_macro: [Batch, T, Global_Dim]
+        if isinstance(adj, tuple):
+            edge_index, edge_weight = adj
         else:
-            mape_loss = 0.0
-        return self.alpha * l1_loss + self.beta * mape_loss
+            edge_index = adj
+            edge_weight = None
 
+        B_N, T, F_in = x.shape
+        N = self.n_nodes
+        B = B_N // N
+        
+        # 1. Reshape and permute to [B, T, N, F_in]
+        x_rich = x.view(B, N, T, F_in).permute(0, 2, 1, 3) # [B, T, N, F_in]
+        
+        # Flatten temporal graph structure vectorially
+        x_flat = x_rich.reshape(B * T * N, F_in)
+        
+        # 2. Replicate and offset edge indices
+        num_edges = edge_index.size(1)
+        edge_index_flat = edge_index.repeat(1, B * T)
+        
+        offsets = torch.arange(B * T, device=x.device) * N
+        offsets_repeated = torch.repeat_interleave(offsets, num_edges).unsqueeze(0)
+        edge_index_flat = edge_index_flat + offsets_repeated
+        
+        # 3. Replicate edge weights
+        if edge_weight is not None:
+            edge_weight_flat = edge_weight.repeat(B * T, 1)
+        else:
+            edge_weight_flat = None
+        
+        # 4. GATv2 Message Passing
+        h1 = F.relu(self.conv1_forward(x_flat, edge_index_flat, edge_weight_flat))
+        h1 = self.norm1(h1)
+        h2 = F.relu(self.conv2_forward(h1, edge_index_flat, edge_weight_flat))
+        h_spatial_flat = self.norm2(h2)
+        
+        # 5. Reshape back to sequence: [Batch, Timesteps, Nodes, GCN_Hidden]
+        h_spatial = h_spatial_flat.view(B, T, N, -1) # [Batch, T, Nodes, GCN_Hidden]
+        
+        # Apply global macroeconomic context modulation
+        h_modulated = self.film(h_spatial, global_macro)
+        
+        # 6. Prepare for shared GRU: [Batch * Nodes, T, GCN_Hidden]
+        h_for_gru = h_modulated.permute(0, 2, 1, 3).reshape(B * N, T, -1)
+        gru_out, _ = self.shared_gru(h_for_gru)
+        last_temporal_state = gru_out[:, -1, :] # [Batch * Nodes, GRU_Hidden]
+        
+        # 7. Output predicted returns
+        preds_flat = self.forecast_head(last_temporal_state) # [Batch * Nodes, 1]
+        
+        # Reshape to [Batch, Nodes]
+        return preds_flat.view(B, N)
+
+    def conv1_forward(self, x, edge_index, edge_weight=None):
+        return self.gcn1(x, edge_index, edge_attr=edge_weight)
+
+    def conv2_forward(self, x, edge_index, edge_weight=None):
+        return self.gcn2(x, edge_index, edge_attr=edge_weight)
+
+
+
+# ==========================================
+# 3. STGNNRegressor Pipeline Wrapper
+# ==========================================
 class STGNNRegressor(BaseEstimator, RegressorMixin):
-    """Clean drop-in replacement for your model evaluation framework."""
-    def __init__(self, epochs=200, batch_size=32, lr=5e-3, patience=15, seq_len=6, device=None):
+    """
+    Pipeline-compatible wrapper for training and evaluating the Multi-Target ST-GNN.
+    - Caches the trained shared multi-commodity network to prevent redundant fits.
+    - Reconstructs prices from stationary price returns dynamically.
+    - Resolves recursive forecasting steps on single rows.
+    """
+    def __init__(self, epochs=200, batch_size=32, lr=5e-4, patience=30, seq_len=12, device=None, df=None, target=None):
         self.epochs = epochs
         self.batch_size = batch_size
         self.lr = lr
@@ -122,70 +145,193 @@ class STGNNRegressor(BaseEstimator, RegressorMixin):
         self.seq_len = seq_len
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         
+        self.df = df
+        self.target = target
+        
         self.scaler_x = StandardScaler()
         self.scaler_y = StandardScaler()
         self.model = None
-        self.history_X = None
+        self.history_returns = None
+        
+        self.shared_model_path = Path("models/saved_models/shared_multi_target_stgnn.pkl")
+        self.feature_names = []
+        self.nodes = []
+        self.scalers = {}
+        self.edge_index = None
+        self.edge_weight = None
 
-    def _make_sequences(self, x_arr, y_arr=None):
-        X_seq, y_seq = [], []
-        for i in range(len(x_arr) - self.seq_len + 1):
-            X_seq.append(x_arr[i : i + self.seq_len])
-            if y_arr is not None:
-                y_seq.append(y_arr[i + self.seq_len - 1])
-        if y_arr is not None:
-            return np.array(X_seq), np.array(y_seq)
-        return np.array(X_seq)
+    def _prepare_returns_matrix(self, df_raw):
+        """Prepares the stationary return inputs for all nodes."""
+        if not self.nodes:
+            food_cols = get_food_columns(df_raw)
+            macro_cols = [c for c in ['Petrol (92 Octane)', 'USD_LKR', 'Food Index', 'Inflation'] if c in df_raw.columns]
+            self.nodes = food_cols + macro_cols
+        
+        prices = df_raw[self.nodes].ffill().bfill().values
+        returns = np.zeros_like(prices)
+        returns[1:] = (prices[1:] - prices[:-1]) / (prices[:-1] + 1e-8)
+        return returns
+
+    def _prepare_global_macro(self, df_raw):
+        """Constructs a 3-dimensional global macro state at each timestep."""
+        petrol_col = 'Petrol (92 Octane)' if 'Petrol (92 Octane)' in df_raw.columns else df_raw.columns[0]
+        usd_col = 'USD_LKR' if 'USD_LKR' in df_raw.columns else df_raw.columns[0]
+        inf_col = 'Inflation' if 'Inflation' in df_raw.columns else df_raw.columns[0]
+        
+        p = df_raw[petrol_col].ffill().bfill().values
+        u = df_raw[usd_col].ffill().bfill().values
+        inf = df_raw[inf_col].ffill().bfill().values
+        
+        p_ret = np.zeros_like(p)
+        p_ret[1:] = (p[1:] - p[:-1]) / (p[:-1] + 1e-8)
+        
+        u_ret = np.zeros_like(u)
+        u_ret[1:] = (u[1:] - u[:-1]) / (u[:-1] + 1e-8)
+        
+        return np.column_stack([p_ret, u_ret, inf])
 
     def fit(self, X, y):
-        X_vals = X.values if hasattr(X, 'values') else np.array(X)
-        y_vals = y.values if hasattr(y, 'values') else np.array(y)
-        
-        X_scaled = self.scaler_x.fit_transform(X_vals)
-        y_scaled = self.scaler_y.fit_transform(y_vals.reshape(-1, 1))
-        
-        X_seq, y_seq = self._make_sequences(X_scaled, y_scaled)
-        
-        if len(X_seq) == 0:
-            raise ValueError(f"Dataset too small for seq_len {self.seq_len}")
-            
-        # Cache the history for predict()
-        if len(X_scaled) >= self.seq_len - 1:
-            self.history_X = X_scaled[-(self.seq_len - 1):]
+        # Save feature names list to locate `lag_1` index during prediction
+        if hasattr(X, 'columns'):
+            self.feature_names = list(X.columns)
         else:
-            self.history_X = X_scaled
+            self.feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+            
+        # Check if pre-trained shared model exists
+        if self.shared_model_path.exists():
+            checkpoint = torch.load(self.shared_model_path, map_location=self.device, weights_only=False)
+            checkpoint_nodes = checkpoint.get('nodes', [])
+            
+            # Check compatibility with current dataset features
+            current_food_cols = get_food_columns(self.df)
+            current_macro_cols = [c for c in ['Petrol (92 Octane)', 'USD_LKR', 'Food Index', 'Inflation'] if c in self.df.columns]
+            current_nodes = current_food_cols + current_macro_cols
+            
+            if checkpoint_nodes == current_nodes:
+                print(f" [+] Found pre-trained Shared Multi-Target ST-GNN. Loading checkpoint...")
+                self.nodes = checkpoint_nodes
+                self.scalers = checkpoint['scalers']
+                
+                if 'edge_index' in checkpoint:
+                    self.edge_index = checkpoint['edge_index'].to(self.device)
+                    self.edge_weight = checkpoint['edge_weight'].to(self.device)
+                else:
+                    adj_matrix = checkpoint['adj_matrix'].to(self.device)
+                    self.edge_index = adj_matrix.nonzero().t().contiguous()
+                    self.edge_weight = adj_matrix[self.edge_index[0], self.edge_index[1]].unsqueeze(1).contiguous()
+                
+                n_nodes = len(self.nodes)
+                self.model = MultiTargetSTGNN(
+                    n_nodes=n_nodes,
+                    in_dim=1,
+                    gcn_hidden=16,
+                    gru_hidden=64,
+                    global_dim=3
+                ).to(self.device)
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                
+                # Setup history returns for prediction
+                returns = self._prepare_returns_matrix(self.df)
+                split_idx = int(len(self.df) * 0.8)
+                train_returns = returns[:split_idx]
+                train_returns_scaled = self.scalers['x'].transform(train_returns)
+                self.history_returns = train_returns_scaled[-self.seq_len:]
+                
+                return self
+            else:
+                print(f" [!] Incompatible cached ST-GNN found (node structure mismatch). Discarding cache and re-training...")
+            
+        print(f" [!] Shared model not found. Training Multi-Target ST-GNN...")
+        # 1. Prepare Returns Matrix and Nodes
+        returns = self._prepare_returns_matrix(self.df)
+        n_nodes = len(self.nodes)
         
-        B, T, N_features = X_seq.shape
+        # 2. Build Adjacency Matrix and convert to sparse representation
+        from src.stgnn.adjacency import EconomicGraphBuilder
+        graph_builder = EconomicGraphBuilder(self.df)
+        G = graph_builder.build_correlation_graph(threshold=0.95)
+        adj_matrix_np = graph_builder.get_adjacency_matrix(G)
+        adj_matrix_t = torch.FloatTensor(adj_matrix_np)
         
-        # Shape: (Batch, Nodes, Timesteps, Feature_Dim)
-        X_t = torch.tensor(X_seq, dtype=torch.float32).permute(0, 2, 1).unsqueeze(3).to(self.device)
-        y_t = torch.tensor(y_seq, dtype=torch.float32).to(self.device)
-
-        self.model = AdvancedSTGNNExtractor(n_nodes=N_features, seq_len=self.seq_len, in_dim=1, out_dim=32).to(self.device)
-        loader = DataLoader(TensorDataset(X_t, y_t), batch_size=self.batch_size, shuffle=True)
+        self.edge_index = adj_matrix_t.nonzero().t().contiguous().to(self.device)
+        self.edge_weight = adj_matrix_t[self.edge_index[0], self.edge_index[1]].unsqueeze(1).contiguous().to(self.device)
         
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=4)
-        criterion = CombinedRobustLoss(alpha=1.0, beta=0.1)
+        # 3. Train/Test Split (80/20 chronological)
+        split_idx = int(len(self.df) * 0.8)
+        train_returns = returns[:split_idx]
+        
+        # Fit standard scaler over returns
+        scaler_x = StandardScaler()
+        train_returns_scaled = scaler_x.fit_transform(train_returns)
+        self.scalers['x'] = scaler_x
+        
+        # 4. Create sequences of shape [Samples, seq_len, Nodes, 1]
+        X_seq, y_seq = [], []
+        for i in range(len(train_returns_scaled) - self.seq_len):
+            X_seq.append(train_returns_scaled[i : i + self.seq_len])
+            y_seq.append(train_returns_scaled[i + self.seq_len])
+            
+        X_seq = np.array(X_seq)[..., np.newaxis] # [Samples, seq_len, Nodes, 1]
+        y_seq = np.array(y_seq) # [Samples, Nodes]
+        
+        # 5. Global Macro features (USD_LKR return, Petrol return, Inflation return)
+        global_macro = self._prepare_global_macro(self.df)[:split_idx]
+        scaler_global = StandardScaler()
+        global_macro_scaled = scaler_global.fit_transform(global_macro)
+        self.scalers['global'] = scaler_global
+        
+        # Create global sequences: [Samples, seq_len, Global_Dim]
+        X_global = []
+        for i in range(len(global_macro_scaled) - self.seq_len):
+            X_global.append(global_macro_scaled[i : i + self.seq_len])
+        X_global = np.array(X_global)
+        
+        # Train dataset loaders
+        X_t = torch.FloatTensor(X_seq).to(self.device)
+        y_t = torch.FloatTensor(y_seq).to(self.device)
+        global_t = torch.FloatTensor(X_global).to(self.device)
+        
+        dataset = TensorDataset(X_t, y_t, global_t)
+        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        
+        # 6. Instantiate model
+        self.model = MultiTargetSTGNN(
+            n_nodes=n_nodes,
+            in_dim=1,
+            gcn_hidden=16,
+            gru_hidden=64,
+            global_dim=3
+        ).to(self.device)
+        
+        # Zero initialize head to start with persistence baseline
+        nn.init.zeros_(self.model.forecast_head.weight)
+        nn.init.zeros_(self.model.forecast_head.bias)
+        
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-3)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs, eta_min=1e-6)
+        criterion = nn.MSELoss()
         
         best_loss = float('inf')
-        patience_counter = 0
         best_weights = None
+        patience_counter = 0
         
         for epoch in range(self.epochs):
             self.model.train()
             epoch_loss = 0.0
-            for bx, by in loader:
+            for bx, by, bg in loader:
                 optimizer.zero_grad()
-                pred = self.model(bx)
-                loss = criterion(pred, by)
+                B, T, N, F_in = bx.shape
+                bx_flat = bx.permute(0, 2, 1, 3).reshape(B * N, T, F_in)
+                
+                preds = self.model(bx_flat, (self.edge_index, self.edge_weight), bg)
+                loss = criterion(preds, by)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
                 epoch_loss += loss.item()
                 
             avg_loss = epoch_loss / len(loader)
-            scheduler.step(avg_loss)
+            scheduler.step()
             
             if avg_loss < best_loss:
                 best_loss = avg_loss
@@ -198,31 +344,111 @@ class STGNNRegressor(BaseEstimator, RegressorMixin):
                     
         if best_weights is not None:
             self.model.load_state_dict({k: v.to(self.device) for k, v in best_weights.items()})
+            
+        # Cache history returns
+        self.history_returns = train_returns_scaled[-self.seq_len:]
+        
+        # Save model and components to disk
+        self.shared_model_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            'model_state_dict': self.model.state_dict(),
+            'nodes': self.nodes,
+            'edge_index': self.edge_index.cpu(),
+            'edge_weight': self.edge_weight.cpu(),
+            'scalers': self.scalers
+        }, self.shared_model_path)
+        
         return self
 
     def predict(self, X):
         self.model.eval()
         X_vals = X.values if hasattr(X, 'values') else np.array(X)
-        X_scaled = self.scaler_x.transform(X_vals)
+        N_samples = len(X_vals)
         
-        # Prepend cached history for continuous sequence forecasting
-        if self.history_X is not None and len(self.history_X) > 0:
-            combined_X = np.vstack([self.history_X, X_scaled])
+        target_idx = self.nodes.index(self.target)
+        
+        # Determine lag_1 index
+        if 'lag_1' in self.feature_names:
+            lag_1_idx = self.feature_names.index('lag_1')
         else:
-            combined_X = X_scaled
+            lag_1_idx = 0
             
-        X_seq = self._make_sequences(combined_X)
+        y_last_vals = X_vals[:, lag_1_idx]
         
-        if len(X_seq) == 0:
-            raise ValueError(f"Not enough history. Expected at least {self.seq_len} rows, got {len(combined_X)}.")
+        # Scenario A: Step-by-Step Recursive Forecasting (len(X) == 1)
+        if N_samples == 1:
+            bx = torch.FloatTensor(self.history_returns[np.newaxis, ..., np.newaxis]).to(self.device)
+            B, T, N, F_in = bx.shape
+            bx_flat = bx.permute(0, 2, 1, 3).reshape(B * N, T, F_in)
             
-        X_t = torch.tensor(X_seq, dtype=torch.float32).permute(0, 2, 1).unsqueeze(3).to(self.device)
-        
-        with torch.no_grad():
-            preds_scaled = self.model(X_t).cpu().numpy()
+            global_raw = self._prepare_global_macro(self.df)
+            global_scaled = self.scalers['global'].transform(global_raw)
             
-        # Update history for recursive predictions (e.g. next step forecast)
-        if len(combined_X) >= self.seq_len - 1:
-            self.history_X = combined_X[-(self.seq_len - 1):]
+            if hasattr(X, 'index') and len(X.index) > 0:
+                dt = X.index[0]
+                idx = self.df.index.get_loc(dt)
+                bg_seq = global_scaled[max(0, idx - self.seq_len + 1) : idx + 1]
+                if len(bg_seq) < self.seq_len:
+                    pad = np.repeat(global_scaled[0:1], self.seq_len - len(bg_seq), axis=0)
+                    bg_seq = np.vstack([pad, bg_seq])
+            else:
+                bg_seq = np.zeros((self.seq_len, 3))
+                
+            bg = torch.FloatTensor(bg_seq[np.newaxis]).to(self.device)
             
-        return self.scaler_y.inverse_transform(preds_scaled).flatten()
+            with torch.no_grad():
+                preds_scaled = self.model(bx_flat, (self.edge_index, self.edge_weight), bg).cpu().numpy()
+                
+            preds_unscaled = self.scalers['x'].inverse_transform(preds_scaled).flatten()
+            pred_return = preds_unscaled[target_idx]
+            
+            y_pred = y_last_vals[0] * (1.0 + pred_return)
+            
+            # Update history returns
+            next_step_returns = preds_scaled[0]
+            self.history_returns = np.vstack([self.history_returns[1:], next_step_returns])
+            
+            return np.array([y_pred])
+            
+        # Scenario B: Test Set Evaluation (len(X) > 1)
+        else:
+            returns = self._prepare_returns_matrix(self.df)
+            returns_scaled = self.scalers['x'].transform(returns)
+            
+            test_indices = []
+            for dt in X.index:
+                test_indices.append(self.df.index.get_loc(dt))
+                
+            global_raw = self._prepare_global_macro(self.df)
+            global_scaled = self.scalers['global'].transform(global_raw)
+            
+            predictions = []
+            for idx in test_indices:
+                seq_start = idx - self.seq_len
+                if seq_start < 0:
+                    pad = np.zeros((-seq_start, len(self.nodes)))
+                    seq = np.vstack([pad, returns_scaled[:idx]])
+                else:
+                    seq = returns_scaled[seq_start:idx]
+                    
+                bx = torch.FloatTensor(seq[np.newaxis, ..., np.newaxis]).to(self.device)
+                B, T, N, F_in = bx.shape
+                bx_flat = bx.permute(0, 2, 1, 3).reshape(B * N, T, F_in)
+                
+                if seq_start < 0:
+                    pad = np.zeros((-seq_start, 3))
+                    bg_seq = np.vstack([pad, global_scaled[:idx]])
+                else:
+                    bg_seq = global_scaled[seq_start:idx]
+                bg = torch.FloatTensor(bg_seq[np.newaxis]).to(self.device)
+                
+                with torch.no_grad():
+                    preds_scaled = self.model(bx_flat, (self.edge_index, self.edge_weight), bg).cpu().numpy()
+                    
+                preds_unscaled = self.scalers['x'].inverse_transform(preds_scaled).flatten()
+                pred_return = preds_unscaled[target_idx]
+                predictions.append(pred_return)
+                
+            predictions = np.array(predictions)
+            y_preds = y_last_vals * (1.0 + predictions)
+            return y_preds

@@ -78,6 +78,7 @@ def build_full_report(
     metrics_by_target:   dict[str, pd.DataFrame],
     inflation_table:     pd.DataFrame | None = None,
     horizon:             int = 12,
+    forecasted_inflation_table: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
     Assembles a dictionary of sheets suitable for export_excel / get_excel_bytes.
@@ -86,16 +87,15 @@ def build_full_report(
       - Summary           : best model + RMSE per target
       - Forecasts_<N>m    : all-target forecast table for horizon N
       - Metrics_<target>  : per-target model metrics (one sheet each, max 10)
-      - Inflation         : monthly & YoY inflation table (if provided)
+      - Inflation         : historical monthly & YoY inflation table (if provided)
+      - Forecasted_Inflation: forecasted monthly & YoY inflation table (if provided)
 
     Args:
         forecasts_by_target: {target: {horizon: forecast_df}}
         metrics_by_target:   {target: metrics_df}
         inflation_table:     Optional DataFrame from InflationCalculator
         horizon:             Primary forecast horizon to include
-
-    Returns:
-        Dict of sheet_name -> DataFrame
+        forecasted_inflation_table: Optional forecasted inflation DataFrame
     """
     sheets = {}
 
@@ -145,6 +145,10 @@ def build_full_report(
             inf_df = inf_df.reset_index()
             inf_df.rename(columns={"Month": "Month"}, inplace=True)
         sheets["Inflation"] = inf_df
+
+    # Forecasted Inflation sheet
+    if forecasted_inflation_table is not None and len(forecasted_inflation_table) > 0:
+        sheets["Forecasted_Inflation"] = forecasted_inflation_table
 
     logger.info(f"Built report with {len(sheets)} sheets.")
     return sheets
